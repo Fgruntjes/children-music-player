@@ -1,0 +1,45 @@
+{
+  "name": "children-music-player",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "pages:dev": "wrangler pages dev --compatibility-date=2024-01-01 dist",
+    "pages:deploy": "npm run build && wrangler pages deploy dist",
+    "db:create": "wrangler d1 create children-music-player-db",
+    "db:migrate": "wrangler d1 execute children-music-player-db --file=./schema.sql",
+    "db:migrate:remote": "wrangler d1 execute children-music-player-db --file=./schema.sql --remote"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.17",
+    "@tanstack/react-query": "^5.90.11",
+    "daisyui": "^5.5.5",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.6",
+    "tailwindcss": "^4.1.17",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251127.0",
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@types/react-router-dom": "^5.3.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vite": "^7.2.4",
+    "wrangler": "^4.51.0"
+  }
+}

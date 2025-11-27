@@ -1,0 +1,17 @@
+name = "children-music-player"
+compatibility_date = "2024-01-01"
+pages_build_output_dir = "./dist"
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "children-music-player-db"
+database_id = "" # Set this after creating the database
+
+[vars]
+ALLOWED_ORIGIN = "*"
+
+# These should be set as secrets, not in the config file
+# GOOGLE_CLIENT_ID = ""
+# GOOGLE_CLIENT_SECRET = ""
+# JWT_SECRET = ""
