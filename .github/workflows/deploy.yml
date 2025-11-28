@@ -5,8 +5,19 @@ on:
     branches:
       - main
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     branches:
       - main
+
+# Cancel in-progress runs for the same PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  PROJECT_NAME: children-music-player
+  PRODUCTION_DB_NAME: children-music-player-db
 
 jobs:
   lint-and-build:
@@ -18,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Install dependencies
@@ -35,39 +46,43 @@ jobs:
         with:
           name: dist
           path: dist/
+          retention-days: 1
 
-  deploy:
+  # ============================================
+  # PRODUCTION DEPLOYMENT (main branch)
+  # ============================================
+  deploy-production:
     needs: lint-and-build
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: read
       deployments: write
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.deployment-url }}
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          name: dist
+          path: dist/
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Deploy to Cloudflare Pages
+      - name: Deploy to Cloudflare Pages (Production)
+        id: deploy
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=children-music-player
+          command: pages deploy dist --project-name=${{ env.PROJECT_NAME }} --branch=main
 
-  migrate-database:
-    needs: deploy
+  migrate-production-database:
+    needs: deploy-production
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
@@ -77,15 +92,196 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run database migrations
+      - name: Run database migrations (Production)
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: d1 execute children-music-player-db --file=./schema.sql --remote
+          command: d1 execute ${{ env.PRODUCTION_DB_NAME }} --file=./schema.sql --remote
+
+  # ============================================
+  # PREVIEW DEPLOYMENT (PRs with 'preview' label)
+  # ============================================
+  check-preview-label:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      has-preview-label: ${{ steps.check.outputs.has-label }}
+      preview-db-name: ${{ steps.names.outputs.db-name }}
+      preview-branch: ${{ steps.names.outputs.branch-name }}
+    steps:
+      - name: Check for preview label
+        id: check
+        run: |
+          HAS_LABEL=$(echo '${{ toJson(github.event.pull_request.labels.*.name) }}' | jq 'any(. == "preview")')
+          echo "has-label=$HAS_LABEL" >> $GITHUB_OUTPUT
+
+      - name: Generate preview names
+        id: names
+        if: steps.check.outputs.has-label == 'true'
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          echo "db-name=children-music-player-preview-pr-${PR_NUMBER}" >> $GITHUB_OUTPUT
+          echo "branch-name=pr-${PR_NUMBER}" >> $GITHUB_OUTPUT
+
+  setup-preview-database:
+    needs: [lint-and-build, check-preview-label]
+    runs-on: ubuntu-latest
+    if: needs.check-preview-label.outputs.has-preview-label == 'true'
+    outputs:
+      database-id: ${{ steps.get-db-id.outputs.database-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create preview database (if not exists)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 create ${{ needs.check-preview-label.outputs.preview-db-name }}
+        continue-on-error: true  # Database might already exist
+
+      - name: Get database ID
+        id: get-db-id
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 list --json
+        continue-on-error: false
+
+      - name: Extract database ID
+        id: extract-db-id
+        run: |
+          DB_NAME="${{ needs.check-preview-label.outputs.preview-db-name }}"
+          # The wrangler output is in the previous step's output
+          DB_ID=$(echo '${{ steps.get-db-id.outputs.command-output }}' | jq -r ".[] | select(.name == \"$DB_NAME\") | .uuid")
+          echo "database-id=$DB_ID" >> $GITHUB_OUTPUT
+
+      - name: Run migrations on preview database
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute ${{ needs.check-preview-label.outputs.preview-db-name }} --file=./schema.sql --remote
+
+    outputs:
+      database-id: ${{ steps.extract-db-id.outputs.database-id }}
+
+  deploy-preview:
+    needs: [check-preview-label, setup-preview-database]
+    runs-on: ubuntu-latest
+    if: needs.check-preview-label.outputs.has-preview-label == 'true'
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+    environment:
+      name: preview-pr-${{ github.event.pull_request.number }}
+      url: ${{ steps.deploy.outputs.deployment-url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create preview wrangler.toml
+        run: |
+          cat > wrangler.preview.toml << EOF
+          name = "${{ env.PROJECT_NAME }}"
+          compatibility_date = "2024-01-01"
+          pages_build_output_dir = "./dist"
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "${{ needs.check-preview-label.outputs.preview-db-name }}"
+          database_id = "${{ needs.setup-preview-database.outputs.database-id }}"
+
+          [vars]
+          ALLOWED_ORIGIN = "*"
+          EOF
+
+      - name: Deploy to Cloudflare Pages (Preview)
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ env.PROJECT_NAME }} --branch=${{ needs.check-preview-label.outputs.preview-branch }} --config=wrangler.preview.toml
+
+      - name: Comment PR with preview URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deploymentUrl = '${{ steps.deploy.outputs.deployment-url }}';
+            const prNumber = context.payload.pull_request.number;
+            const dbName = '${{ needs.check-preview-label.outputs.preview-db-name }}';
+
+            // Find existing comment
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+
+            const botComment = comments.data.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('Preview Deployment')
+            );
+
+            const body = `## Preview Deployment
+
+            | Resource | Value |
+            |----------|-------|
+            | Preview URL | ${deploymentUrl} |
+            | Database | \`${dbName}\` |
+            | Branch | \`${{ needs.check-preview-label.outputs.preview-branch }}\` |
+
+            > **Note:** This preview environment will be automatically cleaned up when the PR is closed.
+
+            Last updated: ${new Date().toISOString()}`;
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: body
+              });
+            }

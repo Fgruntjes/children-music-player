@@ -1,0 +1,121 @@
+name: Cleanup Preview Environment
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+env:
+  NODE_VERSION: '20'
+  PROJECT_NAME: children-music-player
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    # Only cleanup if the PR had the preview label
+    if: contains(github.event.pull_request.labels.*.name, 'preview')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate preview names
+        id: names
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          echo "db-name=children-music-player-preview-pr-${PR_NUMBER}" >> $GITHUB_OUTPUT
+          echo "branch-name=pr-${PR_NUMBER}" >> $GITHUB_OUTPUT
+
+      - name: Delete preview database
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 delete ${{ steps.names.outputs.db-name }} --skip-confirmation
+        continue-on-error: true  # Don't fail if database doesn't exist
+
+      - name: Delete preview deployment
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deployment delete ${{ env.PROJECT_NAME }} --branch=${{ steps.names.outputs.branch-name }}
+        continue-on-error: true  # Don't fail if deployment doesn't exist
+
+      - name: Comment on PR about cleanup
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const dbName = '${{ steps.names.outputs.db-name }}';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: `## Preview Environment Cleaned Up
+
+              The following resources have been deleted:
+              - Preview deployment for branch \`${{ steps.names.outputs.branch-name }}\`
+              - Database \`${dbName}\`
+
+              Cleanup completed at: ${new Date().toISOString()}`
+            });
+
+  # Delete the GitHub environment as well
+  delete-environment:
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'preview')
+    permissions:
+      deployments: write
+    steps:
+      - name: Delete GitHub environment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const envName = `preview-pr-${{ github.event.pull_request.number }}`;
+
+            try {
+              // Get all deployments for this environment
+              const deployments = await github.rest.repos.listDeployments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                environment: envName
+              });
+
+              // Set each deployment to inactive before deletion
+              for (const deployment of deployments.data) {
+                await github.rest.repos.createDeploymentStatus({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  deployment_id: deployment.id,
+                  state: 'inactive'
+                });
+
+                await github.rest.repos.deleteDeployment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  deployment_id: deployment.id
+                });
+              }
+
+              // Delete the environment
+              await github.rest.repos.deleteAnEnvironment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                environment_name: envName
+              });
+
+              console.log(`Successfully deleted environment: ${envName}`);
+            } catch (error) {
+              console.log(`Environment ${envName} may not exist or already deleted: ${error.message}`);
+            }
