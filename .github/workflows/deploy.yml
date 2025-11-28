@@ -73,6 +73,9 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Debug - List dist contents
+        run: ls -la dist/
+
       - name: Create Cloudflare Pages project (if not exists)
         uses: cloudflare/wrangler-action@v3
         with:
@@ -87,7 +90,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=${{ env.PROJECT_NAME }} --branch=main
+          command: pages deploy dist --project-name=${{ env.PROJECT_NAME }} --branch=main --commit-dirty=true
 
   migrate-production-database:
     needs: deploy-production
@@ -241,7 +244,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=${{ env.PROJECT_NAME }} --branch=${{ needs.check-preview-label.outputs.preview-branch }} --config=wrangler.preview.toml
+          command: pages deploy dist --project-name=${{ env.PROJECT_NAME }} --branch=${{ needs.check-preview-label.outputs.preview-branch }} --commit-dirty=true
 
       - name: Comment PR with preview URL
         uses: actions/github-script@v7
