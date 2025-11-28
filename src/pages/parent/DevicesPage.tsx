@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '../../store/authStore';
 import { useDeviceStore } from '../../store/deviceStore';
 import { api } from '../../api/client';
@@ -14,28 +14,28 @@ export function DevicesPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (device?.id) {
-      loadLinkedDevices();
-      loadPairingRequests();
-    }
-  }, [device?.id]);
-
-  const loadLinkedDevices = async () => {
+  const loadLinkedDevices = useCallback(async () => {
     if (!device?.id) return;
     const result = await api.getLinkedDevices(device.id);
     if (result.data) {
       setLinkedDevices(result.data.devices);
     }
-  };
+  }, [device?.id, setLinkedDevices]);
 
-  const loadPairingRequests = async () => {
+  const loadPairingRequests = useCallback(async () => {
     if (!device?.id) return;
     const result = await api.getPairingRequests(device.id);
     if (result.data) {
       setPairingRequests(result.data.requests);
     }
-  };
+  }, [device?.id, setPairingRequests]);
+
+  useEffect(() => {
+    if (device?.id) {
+      loadLinkedDevices();
+      loadPairingRequests();
+    }
+  }, [device?.id, loadLinkedDevices, loadPairingRequests]);
 
   const handleAddDevice = async () => {
     if (!device?.id || !deviceCode.trim()) return;

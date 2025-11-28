@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '../../store/authStore';
 import { useDeviceStore } from '../../store/deviceStore';
 import { useMusicStore } from '../../store/musicStore';
@@ -17,13 +17,7 @@ export function ChildrenPage() {
 
   const childDevices = linkedDevices.filter((d) => d.type === 'child');
 
-  useEffect(() => {
-    if (device?.id) {
-      loadChildrenPlaylists();
-    }
-  }, [device?.id]);
-
-  const loadChildrenPlaylists = async () => {
+  const loadChildrenPlaylists = useCallback(async () => {
     if (!device?.id) return;
     setIsLoading(true);
     const result = await api.getChildrenPlaylists(device.id);
@@ -31,7 +25,13 @@ export function ChildrenPage() {
       setChildPlaylists(result.data.playlists);
     }
     setIsLoading(false);
-  };
+  }, [device?.id, setChildPlaylists]);
+
+  useEffect(() => {
+    if (device?.id) {
+      loadChildrenPlaylists();
+    }
+  }, [device?.id, loadChildrenPlaylists]);
 
   const getPlaylistsForChild = (childId: string) => {
     return childPlaylists.filter((p) => p.ownerDeviceId === childId);
