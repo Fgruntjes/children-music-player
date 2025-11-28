@@ -135,7 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     if: needs.check-preview-label.outputs.has-preview-label == 'true'
     outputs:
-      database-id: ${{ steps.get-db-id.outputs.database-id }}
+      database-id: ${{ steps.extract-db-id.outputs.database-id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -180,9 +180,6 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: d1 execute ${{ needs.check-preview-label.outputs.preview-db-name }} --file=./schema.sql --remote
-
-    outputs:
-      database-id: ${{ steps.extract-db-id.outputs.database-id }}
 
   deploy-preview:
     needs: [check-preview-label, setup-preview-database]
